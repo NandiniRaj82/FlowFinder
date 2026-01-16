@@ -1,4 +1,4 @@
-chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((req,sender, sendResponse) => {
   if (req.action === "runAxe") {
 
     if (!window.axe) {

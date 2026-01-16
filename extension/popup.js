@@ -125,7 +125,6 @@ function renderUI(data) {
         <div class="text-xs font-semibold ${
           issue.source === "axe" ? "text-violet-400" : "text-sky-400"
         }">
-          ${issue.source === "axe" ? "🟪 AXE" : "🟦 Lighthouse"}
           ${issue.impact ? `(${issue.impact})` : ""}
         </div>
         <p class="text-sm mt-1">${issue.title}</p>

@@ -13,6 +13,47 @@
     Flow Finder
   </h1>
 
+  <!-- NEW: Audit Mode Selection -->
+  <div id="audit-options" class="mb-4 space-y-2">
+    <div class="flex items-center gap-2 p-2 rounded-lg bg-slate-800/50 cursor-pointer hover:bg-slate-800" data-mode="current">
+      <input type="radio" name="audit-mode" id="mode-current" value="current" checked class="cursor-pointer">
+      <label for="mode-current" class="text-sm cursor-pointer flex-1">Current Page Only</label>
+    </div>
+    
+    <div class="flex items-center gap-2 p-2 rounded-lg bg-slate-800/50 cursor-pointer hover:bg-slate-800" data-mode="select">
+      <input type="radio" name="audit-mode" id="mode-select" value="select" class="cursor-pointer">
+      <label for="mode-select" class="text-sm cursor-pointer flex-1">Select Pages</label>
+    </div>
+    
+    <div class="flex items-center gap-2 p-2 rounded-lg bg-slate-800/50 cursor-pointer hover:bg-slate-800" data-mode="full">
+      <input type="radio" name="audit-mode" id="mode-full" value="full" class="cursor-pointer">
+      <label for="mode-full" class="text-sm cursor-pointer flex-1">Full Website</label>
+    </div>
+  </div>
+
+  <!-- NEW: Page Selection Container (hidden by default) -->
+  <div id="page-selector" class="mb-4 hidden">
+    <div class="text-xs text-gray-400 mb-2">Select pages to audit:</div>
+    
+    <!-- NEW: Search Input -->
+    <div class="mb-2">
+      <input 
+        type="text" 
+        id="page-search" 
+        placeholder="Search pages..." 
+        class="w-full px-3 py-2 text-sm bg-slate-800 text-gray-200 rounded-lg border border-slate-700 focus:outline-none focus:border-indigo-500"
+      />
+    </div>
+    
+    <div class="max-h-[200px] overflow-y-auto space-y-1 bg-black/40 rounded-lg p-2" id="page-list">
+      <!-- Pages will be populated here -->
+    </div>
+    <div class="mt-2 text-xs text-gray-400 text-center">
+      <span id="selected-count">0</span> pages selected
+      <span id="filtered-count" class="hidden"> • <span id="visible-count">0</span> visible</span>
+    </div>
+  </div>
+
   <button
     id="run"
     class="w-full mb-4 py-2 rounded-lg bg-gradient-to-r from-indigo-500 to-blue-500 text-sm font-medium"

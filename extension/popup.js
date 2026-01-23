@@ -1,3 +1,266 @@
+// NEW: Global variable to store fetched URLs
+let availableUrls = [];
+
+// NEW: Initialize audit mode listeners
+document.addEventListener('DOMContentLoaded', () => {
+  const radioButtons = document.querySelectorAll('input[name="audit-mode"]');
+  const modeContainers = document.querySelectorAll('[data-mode]');
+  
+  // Radio button change handler
+  radioButtons.forEach(radio => {
+    radio.addEventListener('change', handleModeChange);
+  });
+
+  // Click on container to select radio
+  modeContainers.forEach(container => {
+    container.addEventListener('click', (e) => {
+      if (e.target.tagName !== 'INPUT') {
+        const radio = container.querySelector('input[type="radio"]');
+        radio.checked = true;
+        handleModeChange();
+      }
+    });
+  });
+});
+
+// NEW: Handle audit mode change
+function handleModeChange() {
+  const selectedMode = document.querySelector('input[name="audit-mode"]:checked').value;
+  const pageSelector = document.getElementById('page-selector');
+  const pageList = document.getElementById('page-list');
+  const searchInput = document.getElementById('page-search');
+  
+  if (selectedMode === 'select') {
+    // Show page selector when "Select Pages" is chosen
+    pageSelector.classList.remove('hidden');
+    
+    // Fetch sitemap if not already fetched
+    if (availableUrls.length === 0) {
+      fetchSitemapForSelection();
+    }
+  } else {
+    // Hide page selector when other options are chosen
+    pageSelector.classList.add('hidden');
+    
+    // Clear all checkboxes
+    const checkboxes = pageList.querySelectorAll('input[type="checkbox"]');
+    checkboxes.forEach(cb => cb.checked = false);
+    
+    // Clear search input
+    if (searchInput) {
+      searchInput.value = '';
+      // Trigger input event to reset filtering
+      searchInput.dispatchEvent(new Event('input'));
+    }
+    
+    // Reset selected count
+    updateSelectedCount();
+  }
+}
+
+// NEW: Fetch sitemap and populate page selector
+async function fetchSitemapForSelection() {
+  const pageSelector = document.getElementById('page-selector');
+  const pageList = document.getElementById('page-list');
+  
+  pageList.innerHTML = '<div class="text-xs text-gray-400 text-center py-2">Loading pages...</div>';
+  pageSelector.classList.remove('hidden');
+
+  chrome.tabs.query({ active: true, currentWindow: true }, async ([tab]) => {
+    const url = tab.url;
+
+    try {
+      const sitemapRes = await fetch("http://localhost:3000/fetch-sitemap", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url })
+      });
+
+      const sitemapData = await sitemapRes.json();
+      availableUrls = sitemapData.urls || [url];
+
+      if (availableUrls.length === 1) {
+        pageList.innerHTML = '<div class="text-xs text-gray-400 text-center py-2">No sitemap found. Only current page available.</div>';
+        return;
+      }
+
+      renderPageList(availableUrls);
+
+    } catch (err) {
+      console.error(err);
+      pageList.innerHTML = '<div class="text-xs text-red-400 text-center py-2">Failed to load pages</div>';
+    }
+  });
+}
+
+// NEW: Render the page selection list
+function renderPageList(urls) {
+  const pageList = document.getElementById('page-list');
+  pageList.innerHTML = '';
+
+  // Add "Select All" option
+  const selectAllDiv = document.createElement('div');
+  selectAllDiv.className = 'flex items-center gap-2 p-2 rounded bg-slate-800/50 cursor-pointer hover:bg-slate-700';
+  selectAllDiv.setAttribute('data-page-item', 'true');
+  selectAllDiv.innerHTML = `
+    <input type="checkbox" id="select-all" class="cursor-pointer">
+    <label for="select-all" class="text-xs cursor-pointer flex-1 font-semibold text-indigo-400">Select All (<span id="select-all-count">${urls.length}</span>)</label>
+  `;
+  pageList.appendChild(selectAllDiv);
+
+  // Select all handler - only selects VISIBLE items
+  selectAllDiv.querySelector('#select-all').addEventListener('change', (e) => {
+    const visibleCheckboxes = Array.from(pageList.querySelectorAll('.page-checkbox'))
+      .filter(cb => !cb.closest('[data-page-item]').classList.contains('hidden'));
+    
+    visibleCheckboxes.forEach(cb => cb.checked = e.target.checked);
+    updateSelectedCount();
+  });
+
+  // Add individual pages
+  urls.forEach((url, index) => {
+    const pageDiv = document.createElement('div');
+    pageDiv.className = 'flex items-center gap-2 p-2 rounded bg-black/40 cursor-pointer hover:bg-slate-800';
+    pageDiv.setAttribute('data-page-item', 'true');
+    
+    const urlObj = new URL(url);
+    const displayPath = urlObj.pathname === '/' ? 'Home' : urlObj.pathname;
+    
+    pageDiv.innerHTML = `
+      <input type="checkbox" id="page-${index}" value="${url}" class="page-checkbox cursor-pointer">
+      <label for="page-${index}" class="text-xs cursor-pointer flex-1 truncate" title="${url}" data-search-text="${url.toLowerCase()}">${displayPath}</label>
+    `;
+    
+    pageList.appendChild(pageDiv);
+
+    // Checkbox change handler
+    pageDiv.querySelector('.page-checkbox').addEventListener('change', () => {
+      updateSelectedCount();
+      updateSelectAllState();
+    });
+  });
+
+  // Initialize search functionality
+  initializeSearch();
+  updateSelectedCount();
+}
+
+// NEW: Update selected page count
+function updateSelectedCount() {
+  const checkedBoxes = document.querySelectorAll('.page-checkbox:checked');
+  document.getElementById('selected-count').textContent = checkedBoxes.length;
+  updateSelectAllState();
+}
+
+// NEW: Update "Select All" checkbox state based on visible items
+function updateSelectAllState() {
+  const selectAllCheckbox = document.getElementById('select-all');
+  const pageList = document.getElementById('page-list');
+  
+  if (!selectAllCheckbox) return;
+  
+  const visibleCheckboxes = Array.from(pageList.querySelectorAll('.page-checkbox'))
+    .filter(cb => !cb.closest('[data-page-item]').classList.contains('hidden'));
+  
+  const visibleChecked = visibleCheckboxes.filter(cb => cb.checked);
+  
+  if (visibleCheckboxes.length === 0) {
+    selectAllCheckbox.checked = false;
+    selectAllCheckbox.indeterminate = false;
+  } else if (visibleChecked.length === visibleCheckboxes.length) {
+    selectAllCheckbox.checked = true;
+    selectAllCheckbox.indeterminate = false;
+  } else if (visibleChecked.length > 0) {
+    selectAllCheckbox.checked = false;
+    selectAllCheckbox.indeterminate = true;
+  } else {
+    selectAllCheckbox.checked = false;
+    selectAllCheckbox.indeterminate = false;
+  }
+}
+
+// NEW: Initialize search functionality
+function initializeSearch() {
+  const searchInput = document.getElementById('page-search');
+  const pageList = document.getElementById('page-list');
+  const filteredCountDiv = document.getElementById('filtered-count');
+  const visibleCountSpan = document.getElementById('visible-count');
+  const selectAllCountSpan = document.getElementById('select-all-count');
+  
+  if (!searchInput) return;
+  
+  searchInput.addEventListener('input', (e) => {
+    const searchTerm = e.target.value.toLowerCase().trim();
+    const pageItems = pageList.querySelectorAll('[data-page-item]');
+    let visibleCount = 0;
+    
+    pageItems.forEach((item, index) => {
+      // Skip the "Select All" row
+      if (index === 0) return;
+      
+      const label = item.querySelector('label');
+      const searchText = label.getAttribute('data-search-text');
+      
+      if (searchTerm === '' || searchText.includes(searchTerm)) {
+        item.classList.remove('hidden');
+        visibleCount++;
+      } else {
+        item.classList.add('hidden');
+      }
+    });
+    
+    // Update visible count display
+    if (searchTerm !== '') {
+      filteredCountDiv.classList.remove('hidden');
+      visibleCountSpan.textContent = visibleCount;
+      selectAllCountSpan.textContent = visibleCount;
+    } else {
+      filteredCountDiv.classList.add('hidden');
+      selectAllCountSpan.textContent = availableUrls.length;
+    }
+    
+    // Update "Select All" state after filtering
+    updateSelectAllState();
+    
+    // Show message if no results
+    if (visibleCount === 0 && searchTerm !== '') {
+      let noResultsDiv = pageList.querySelector('#no-results');
+      if (!noResultsDiv) {
+        noResultsDiv = document.createElement('div');
+        noResultsDiv.id = 'no-results';
+        noResultsDiv.className = 'text-xs text-gray-500 text-center py-4';
+        noResultsDiv.textContent = 'No pages found';
+        pageList.appendChild(noResultsDiv);
+      }
+      noResultsDiv.classList.remove('hidden');
+    } else {
+      const noResultsDiv = pageList.querySelector('#no-results');
+      if (noResultsDiv) {
+        noResultsDiv.classList.add('hidden');
+      }
+    }
+  });
+  
+  // Clear search when mode changes
+  searchInput.value = '';
+}
+
+// NEW: Get selected URLs based on mode
+function getUrlsToAudit(allUrls, currentUrl) {
+  const selectedMode = document.querySelector('input[name="audit-mode"]:checked').value;
+  
+  if (selectedMode === 'current') {
+    return [currentUrl];
+  } else if (selectedMode === 'select') {
+    const selectedCheckboxes = document.querySelectorAll('.page-checkbox:checked');
+    const selectedUrls = Array.from(selectedCheckboxes).map(cb => cb.value);
+    return selectedUrls.length > 0 ? selectedUrls : [currentUrl];
+  } else {
+    // full mode
+    return allUrls;
+  }
+}
+
 document.getElementById("run").addEventListener("click", async () => {
   showLoading();
 
@@ -10,33 +273,34 @@ document.getElementById("run").addEventListener("click", async () => {
     }
 
     try {
-      // NEW: Fetch sitemap URLs first
-      const sitemapRes = await fetch("http://localhost:3000/fetch-sitemap", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url })
-      });
+      const selectedMode = document.querySelector('input[name="audit-mode"]:checked').value;
+      let urlsToAudit = [url];
 
-      const sitemapData = await sitemapRes.json();
-      const urlsToAudit = sitemapData.urls || [url];
+      // Fetch sitemap only if not in "current" mode
+      if (selectedMode !== 'current') {
+        const sitemapRes = await fetch("http://localhost:3000/fetch-sitemap", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url })
+        });
 
-      // NEW: Log sitemap status
-      if (!sitemapData.success) {
-        console.log("Full site run not possible, running only current URL");
-      } else {
-        console.log(`Found ${urlsToAudit.length} URLs to audit`);
+        const sitemapData = await sitemapRes.json();
+        const allUrls = sitemapData.urls || [url];
+
+        if (!sitemapData.success) {
+          console.log("Full site run not possible, running only current URL");
+        } else {
+          console.log(`Found ${allUrls.length} URLs from sitemap`);
+        }
+
+        urlsToAudit = getUrlsToAudit(allUrls, url);
       }
 
-      // NEW: Update loading message with URL count
+      console.log(`Auditing ${urlsToAudit.length} URL(s)`);
       showLoadingWithCount(urlsToAudit.length);
 
-      // NEW: Audit all URLs and aggregate results
       const allResults = await auditMultipleURLs(urlsToAudit, tab.id);
-
-      // NEW: Calculate average scores
       const averageScores = calculateAverageScores(allResults);
-
-      // NEW: Combine all accessibility issues
       const allIssues = combineAllIssues(allResults);
 
       const combined = {
@@ -53,7 +317,6 @@ document.getElementById("run").addEventListener("click", async () => {
   });
 });
 
-// NEW: Audit multiple URLs
 async function auditMultipleURLs(urls, tabId) {
   const results = [];
 
@@ -61,10 +324,8 @@ async function auditMultipleURLs(urls, tabId) {
     const currentUrl = urls[i];
     
     try {
-      // Update progress
       updateProgress(i + 1, urls.length, currentUrl);
 
-      // Run Lighthouse audit
       const lhRes = await fetch("http://localhost:3000/audit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -73,7 +334,6 @@ async function auditMultipleURLs(urls, tabId) {
 
       const lighthouseData = await lhRes.json();
 
-      // Run Axe audit only on the current tab URL (first URL)
       let axeIssues = [];
       if (i === 0) {
         await chrome.scripting.executeScript({
@@ -107,7 +367,6 @@ async function auditMultipleURLs(urls, tabId) {
   return results;
 }
 
-// NEW: Calculate average scores from all audits
 function calculateAverageScores(results) {
   if (results.length === 0) {
     return { performance: 0, accessibility: 0, bestPractices: 0, seo: 0 };
@@ -131,12 +390,10 @@ function calculateAverageScores(results) {
   };
 }
 
-// NEW: Combine all accessibility issues from all URLs
 function combineAllIssues(results) {
   const issuesMap = new Map();
 
   results.forEach(result => {
-    // Add Lighthouse issues
     result.lighthouseIssues.forEach(issue => {
       const key = `lighthouse-${issue.id}`;
       if (!issuesMap.has(key)) {
@@ -150,7 +407,6 @@ function combineAllIssues(results) {
       }
     });
 
-    // Add Axe issues
     result.axeIssues.forEach(violation => {
       const key = `axe-${violation.id}`;
       if (!issuesMap.has(key)) {
@@ -169,7 +425,6 @@ function combineAllIssues(results) {
   return Array.from(issuesMap.values());
 }
 
-// NEW: Update progress during multi-URL audit
 function updateProgress(current, total, currentUrl) {
   const scoresDiv = document.getElementById("scores");
   scoresDiv.innerHTML = `
@@ -180,7 +435,6 @@ function updateProgress(current, total, currentUrl) {
   `;
 }
 
-// NEW: Show loading with URL count
 function showLoadingWithCount(count) {
   const scoresDiv = document.getElementById("scores");
   const issuesDiv = document.getElementById("issues");
@@ -253,7 +507,6 @@ function renderUI(data) {
   }
 
   data.accessibilityIssues.forEach(issue => {
-    // NEW: Show count if issue appears on multiple pages
     const countBadge = issue.count > 1 
       ? `<span class="text-xs text-gray-500 ml-1">(${issue.count} pages)</span>` 
       : '';

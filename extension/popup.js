@@ -1,7 +1,8 @@
-// NEW: Global variable to store fetched URLs
+// Global variable to store fetched URLs
 let availableUrls = [];
+let pageSelectorExpanded = true;
 
-// NEW: Initialize audit mode listeners
+// Initialize audit mode listeners
 document.addEventListener('DOMContentLoaded', () => {
   const radioButtons = document.querySelectorAll('input[name="audit-mode"]');
   const modeContainers = document.querySelectorAll('[data-mode]');
@@ -23,7 +24,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 
-// NEW: Handle audit mode change
+// Handle audit mode change
 function handleModeChange() {
   const selectedMode = document.querySelector('input[name="audit-mode"]:checked').value;
   const pageSelector = document.getElementById('page-selector');
@@ -58,7 +59,7 @@ function handleModeChange() {
   }
 }
 
-// NEW: Fetch sitemap and populate page selector
+// Fetch sitemap and populate page selector
 async function fetchSitemapForSelection() {
   const pageSelector = document.getElementById('page-selector');
   const pageList = document.getElementById('page-list');
@@ -93,10 +94,37 @@ async function fetchSitemapForSelection() {
   });
 }
 
-// NEW: Render the page selection list
+// Render the page selection list
 function renderPageList(urls) {
+  const pageSelector = document.getElementById('page-selector');
   const pageList = document.getElementById('page-list');
   pageList.innerHTML = '';
+
+  // Add toggle button at the top
+  const toggleDiv = document.createElement('div');
+  toggleDiv.className = 'flex items-center justify-between mb-2';
+  toggleDiv.innerHTML = `
+    <span class="text-xs text-gray-400">Pages to audit:</span>
+    <button id="toggle-list" class="text-xs text-indigo-400 hover:text-indigo-300">
+      ${pageSelectorExpanded ? '▲ Hide' : '▼ Show'}
+    </button>
+  `;
+  pageSelector.insertBefore(toggleDiv, pageSelector.firstChild.nextSibling);
+
+  // Toggle button handler
+  document.getElementById('toggle-list').addEventListener('click', () => {
+    pageSelectorExpanded = !pageSelectorExpanded;
+    const listContainer = document.querySelector('.page-list-container');
+    const toggleBtn = document.getElementById('toggle-list');
+    
+    if (pageSelectorExpanded) {
+      listContainer.classList.remove('hidden');
+      toggleBtn.innerHTML = '▲ Hide';
+    } else {
+      listContainer.classList.add('hidden');
+      toggleBtn.innerHTML = '▼ Show';
+    }
+  });
 
   // Add "Select All" option
   const selectAllDiv = document.createElement('div');
@@ -145,14 +173,14 @@ function renderPageList(urls) {
   updateSelectedCount();
 }
 
-// NEW: Update selected page count
+// Update selected page count
 function updateSelectedCount() {
   const checkedBoxes = document.querySelectorAll('.page-checkbox:checked');
   document.getElementById('selected-count').textContent = checkedBoxes.length;
   updateSelectAllState();
 }
 
-// NEW: Update "Select All" checkbox state based on visible items
+// Update "Select All" checkbox state based on visible items
 function updateSelectAllState() {
   const selectAllCheckbox = document.getElementById('select-all');
   const pageList = document.getElementById('page-list');
@@ -179,7 +207,7 @@ function updateSelectAllState() {
   }
 }
 
-// NEW: Initialize search functionality
+// Initialize search functionality
 function initializeSearch() {
   const searchInput = document.getElementById('page-search');
   const pageList = document.getElementById('page-list');
@@ -245,7 +273,7 @@ function initializeSearch() {
   searchInput.value = '';
 }
 
-// NEW: Get selected URLs based on mode
+// Get selected URLs based on mode
 function getUrlsToAudit(allUrls, currentUrl) {
   const selectedMode = document.querySelector('input[name="audit-mode"]:checked').value;
   
@@ -319,6 +347,31 @@ document.getElementById("run").addEventListener("click", async () => {
 
 async function auditMultipleURLs(urls, tabId) {
   const results = [];
+  let axeAvailable = false;
+
+  // NEW: Check if Axe is available on first URL
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: tabId },
+      files: ["axe.min.js", "content.js"]
+    });
+
+    const axeCheck = await new Promise((resolve) => {
+      chrome.tabs.sendMessage(tabId, { action: "checkAxe" }, (response) => {
+        if (chrome.runtime.lastError || !response) {
+          resolve(false);
+        } else {
+          resolve(response.available || false);
+        }
+      });
+    });
+
+    axeAvailable = axeCheck;
+    console.log(`Axe Core ${axeAvailable ? 'is' : 'is NOT'} available`);
+  } catch (err) {
+    console.error("Failed to check Axe availability:", err);
+    axeAvailable = false;
+  }
 
   for (let i = 0; i < urls.length; i++) {
     const currentUrl = urls[i];
@@ -335,12 +388,8 @@ async function auditMultipleURLs(urls, tabId) {
       const lighthouseData = await lhRes.json();
 
       let axeIssues = [];
-      if (i === 0) {
-        await chrome.scripting.executeScript({
-          target: { tabId: tabId },
-          files: ["axe.min.js", "content.js"]
-        });
-
+      // Only run Axe on first URL and if it's available
+      if (i === 0 && axeAvailable) {
         axeIssues = await new Promise((resolve) => {
           chrome.tabs.sendMessage(tabId, { action: "runAxe" }, (axeData) => {
             if (chrome.runtime.lastError || !axeData) {
@@ -400,10 +449,14 @@ function combineAllIssues(results) {
         issuesMap.set(key, {
           source: "lighthouse",
           title: issue.title,
-          count: 1
+          count: 1,
+          selector: issue.selector || null,
+          pages: [result.url]
         });
       } else {
-        issuesMap.get(key).count++;
+        const existing = issuesMap.get(key);
+        existing.count++;
+        existing.pages.push(result.url);
       }
     });
 
@@ -414,10 +467,14 @@ function combineAllIssues(results) {
           source: "axe",
           title: violation.help,
           impact: violation.impact,
-          count: 1
+          count: 1,
+          selector: violation.nodes && violation.nodes[0] ? violation.nodes[0].target : null,
+          pages: [result.url]
         });
       } else {
-        issuesMap.get(key).count++;
+        const existing = issuesMap.get(key);
+        existing.count++;
+        existing.pages.push(result.url);
       }
     });
   });
@@ -500,26 +557,118 @@ function renderUI(data) {
   if (!data.accessibilityIssues.length) {
     issuesDiv.innerHTML = `
       <p class="text-center text-sm text-gray-400">
-        No accessibility issues found 
+        No accessibility issues found ✓
       </p>
     `;
     return;
   }
 
-  data.accessibilityIssues.forEach(issue => {
-    const countBadge = issue.count > 1 
-      ? `<span class="text-xs text-gray-500 ml-1">(${issue.count} pages)</span>` 
-      : '';
+  data.accessibilityIssues.forEach((issue, index) => {
+    const issueDiv = document.createElement('div');
+    issueDiv.className = 'border border-slate-800 rounded-lg p-2 bg-black/40';
+    
+    // Issue header with source badge
+    const headerDiv = document.createElement('div');
+    headerDiv.className = 'flex items-center justify-between mb-1';
+    
+    const sourceSpan = document.createElement('span');
+    sourceSpan.className = `text-xs font-semibold ${issue.source === "axe" ? "text-violet-400" : "text-sky-400"}`;
+    sourceSpan.textContent = issue.source.toUpperCase();
+    if (issue.impact) {
+      sourceSpan.textContent += ` (${issue.impact})`;
+    }
+    
+    headerDiv.appendChild(sourceSpan);
+    
+    // Title
+    const titleP = document.createElement('p');
+    titleP.className = 'text-sm mt-1';
+    titleP.textContent = issue.title;
+    
+    issueDiv.appendChild(headerDiv);
+    issueDiv.appendChild(titleP);
+    
+    // NEW: Show pages affected if multiple pages
+    if (issue.count > 1 && issue.pages && issue.pages.length > 0) {
+      const pagesDiv = document.createElement('div');
+      pagesDiv.className = 'mt-2 pt-2 border-t border-slate-700';
+      
+      const pagesHeader = document.createElement('div');
+      pagesHeader.className = 'text-xs text-gray-400 mb-1';
+      pagesHeader.textContent = `Found on ${issue.pages.length} page${issue.pages.length > 1 ? 's' : ''}:`;
+      pagesDiv.appendChild(pagesHeader);
+      
+      const pagesList = document.createElement('div');
+      pagesList.className = 'space-y-1';
+      
+      issue.pages.forEach(pageUrl => {
+        const pageItem = document.createElement('div');
+        pageItem.className = 'flex items-center gap-2';
+        
+        const urlObj = new URL(pageUrl);
+        const displayPath = urlObj.pathname === '/' ? 'Home' : urlObj.pathname;
+        
+        const pathSpan = document.createElement('span');
+        pathSpan.className = 'text-xs text-gray-300 flex-1 truncate';
+        pathSpan.textContent = displayPath;
+        pathSpan.title = pageUrl;
+        
+        if (issue.selector) {
+          const viewBtn = document.createElement('button');
+          viewBtn.className = 'text-xs text-indigo-400 hover:text-indigo-300 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700';
+          viewBtn.innerHTML = '👁️ View';
+          viewBtn.addEventListener('click', () => {
+            highlightElementOnPage(issue.selector, pageUrl);
+          });
+          
+          pageItem.appendChild(pathSpan);
+          pageItem.appendChild(viewBtn);
+        } else {
+          pageItem.appendChild(pathSpan);
+        }
+        
+        pagesList.appendChild(pageItem);
+      });
+      
+      pagesDiv.appendChild(pagesList);
+      issueDiv.appendChild(pagesDiv);
+    } else if (issue.selector) {
+      const viewBtn = document.createElement('button');
+      viewBtn.className = 'mt-2 text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1';
+      viewBtn.innerHTML = '👁️ View on page';
+      viewBtn.addEventListener('click', () => {
+        highlightElementOnPage(issue.selector, issue.pages[0]);
+      });
+      issueDiv.appendChild(viewBtn);
+    }
+    
+    issuesDiv.appendChild(issueDiv);
+  });
+}
 
-    issuesDiv.innerHTML += `
-      <div class="border border-slate-800 rounded-lg p-2 bg-black/40">
-        <div class="text-xs font-semibold ${
-          issue.source === "axe" ? "text-violet-400" : "text-sky-400"
-        }">
-          ${issue.impact ? `(${issue.impact})` : ""}${countBadge}
-        </div>
-        <p class="text-sm mt-1">${issue.title}</p>
-      </div>
-    `;
+function highlightElementOnPage(selector, targetUrl) {
+  chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
+    if (!tab) return;
+
+    if (targetUrl && tab.url !== targetUrl) {
+      chrome.tabs.update(tab.id, { url: targetUrl }, () => {
+        setTimeout(() => {
+          sendHighlightMessage(tab.id, selector);
+        }, 1500);
+      });
+    } else {
+      sendHighlightMessage(tab.id, selector);
+    }
+  });
+}
+
+function sendHighlightMessage(tabId, selector) {
+  chrome.tabs.sendMessage(tabId, { 
+    action: "highlightElement", 
+    selector: selector 
+  }, (response) => {
+    if (chrome.runtime.lastError) {
+      console.error("Failed to highlight element:", chrome.runtime.lastError.message);
+    }
   });
 }

@@ -264,13 +264,21 @@ app.post("/audit", async (req, res) => {
 
     const accessibilityIssues = Object.values(lhr.audits)
       .filter(a => a.score === 0 && a.details?.type === "table")
-      .map(a => ({
-        id: a.id,
-        title: a.title,
-        description: a.description,
-        // UPDATED: Include selector information if available
-        selector: a.details?.items?.[0]?.selector || null
-      }));
+      .map(a => {
+        // Extract selector from various possible locations in Lighthouse data
+        let selector = null;
+        if (a.details?.items && a.details.items.length > 0) {
+          const firstItem = a.details.items[0];
+          selector = firstItem.selector || firstItem.node?.selector || null;
+        }
+        
+        return {
+          id: a.id,
+          title: a.title,
+          description: a.description,
+          selector: selector
+        };
+      });
 
     res.json({
       scores: {

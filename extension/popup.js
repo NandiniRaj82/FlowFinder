@@ -1,276 +1,186 @@
-// Global variable to store fetched URLs
+// =======================
+// GLOBAL STATE
+// =======================
 let availableUrls = [];
 let pageSelectorExpanded = true;
+let lastAuditResults = null;
 
-// Initialize audit mode listeners
-document.addEventListener('DOMContentLoaded', () => {
-  const radioButtons = document.querySelectorAll('input[name="audit-mode"]');
-  const modeContainers = document.querySelectorAll('[data-mode]');
-  
-  // Radio button change handler
-  radioButtons.forEach(radio => {
-    radio.addEventListener('change', handleModeChange);
-  });
+// =======================
+// INIT
+// =======================
+document.addEventListener("DOMContentLoaded", () => {
+  const radios = document.querySelectorAll('input[name="audit-mode"]');
+  const containers = document.querySelectorAll('[data-mode]');
 
-  // Click on container to select radio
-  modeContainers.forEach(container => {
-    container.addEventListener('click', (e) => {
-      if (e.target.tagName !== 'INPUT') {
-        const radio = container.querySelector('input[type="radio"]');
-        radio.checked = true;
+  radios.forEach(r => r.addEventListener("change", handleModeChange));
+
+  containers.forEach(box => {
+    box.addEventListener("click", e => {
+      if (e.target.tagName !== "INPUT") {
+        box.querySelector("input").checked = true;
         handleModeChange();
       }
     });
   });
+  
+  // Restore previous audit results if available
+  restoreAuditResults();
 });
 
-// Handle audit mode change
+// =======================
+// MODE CHANGE HANDLER
+// =======================
 function handleModeChange() {
-  const selectedMode = document.querySelector('input[name="audit-mode"]:checked').value;
-  const pageSelector = document.getElementById('page-selector');
-  const pageList = document.getElementById('page-list');
-  const searchInput = document.getElementById('page-search');
-  
-  if (selectedMode === 'select') {
-    // Show page selector when "Select Pages" is chosen
-    pageSelector.classList.remove('hidden');
-    
-    // Fetch sitemap if not already fetched
+  const mode = document.querySelector('input[name="audit-mode"]:checked').value;
+  const selector = document.getElementById("page-selector");
+  const list = document.getElementById("page-list");
+  const search = document.getElementById("page-search");
+
+  if (mode === "select") {
+    selector.classList.remove("hidden");
+
     if (availableUrls.length === 0) {
       fetchSitemapForSelection();
     }
   } else {
-    // Hide page selector when other options are chosen
-    pageSelector.classList.add('hidden');
-    
-    // Clear all checkboxes
-    const checkboxes = pageList.querySelectorAll('input[type="checkbox"]');
-    checkboxes.forEach(cb => cb.checked = false);
-    
-    // Clear search input
-    if (searchInput) {
-      searchInput.value = '';
-      // Trigger input event to reset filtering
-      searchInput.dispatchEvent(new Event('input'));
-    }
-    
-    // Reset selected count
-    updateSelectedCount();
+    // FULL RESET
+    selector.classList.add("hidden");
+    list.innerHTML = "";
+    availableUrls = [];
+    pageSelectorExpanded = true;
+
+    if (search) search.value = "";
+    document.getElementById("selected-count").textContent = "0";
   }
 }
 
-// Fetch sitemap and populate page selector
+// =======================
+// FETCH SITEMAP
+// =======================
 async function fetchSitemapForSelection() {
-  const pageSelector = document.getElementById('page-selector');
-  const pageList = document.getElementById('page-list');
-  
-  pageList.innerHTML = '<div class="text-xs text-gray-400 text-center py-2">Loading pages...</div>';
-  pageSelector.classList.remove('hidden');
+  const list = document.getElementById("page-list");
+
+  list.innerHTML =
+    '<div class="text-xs text-gray-400 text-center py-2">Loading pages...</div>';
 
   chrome.tabs.query({ active: true, currentWindow: true }, async ([tab]) => {
-    const url = tab.url;
-
     try {
-      const sitemapRes = await fetch("http://localhost:3000/fetch-sitemap", {
+      const res = await fetch("http://localhost:3000/fetch-sitemap", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url })
+        body: JSON.stringify({ url: tab.url })
       });
 
-      const sitemapData = await sitemapRes.json();
-      availableUrls = sitemapData.urls || [url];
-
-      if (availableUrls.length === 1) {
-        pageList.innerHTML = '<div class="text-xs text-gray-400 text-center py-2">No sitemap found. Only current page available.</div>';
-        return;
-      }
-
+      const data = await res.json();
+      availableUrls = data.urls || [tab.url];
       renderPageList(availableUrls);
 
-    } catch (err) {
-      console.error(err);
-      pageList.innerHTML = '<div class="text-xs text-red-400 text-center py-2">Failed to load pages</div>';
+    } catch (e) {
+      list.innerHTML =
+        '<div class="text-xs text-red-400 text-center py-2">Failed to load pages</div>';
     }
   });
 }
 
-// Render the page selection list
+// =======================
+// RENDER PAGE LIST
+// =======================
 function renderPageList(urls) {
-  const pageSelector = document.getElementById('page-selector');
-  const pageList = document.getElementById('page-list');
-  pageList.innerHTML = '';
+  const selector = document.getElementById("page-selector");
+  const list = document.getElementById("page-list");
 
-  // Add toggle button at the top
-  const toggleDiv = document.createElement('div');
-  toggleDiv.className = 'flex items-center justify-between mb-2';
-  toggleDiv.innerHTML = `
+  list.innerHTML = "";
+
+  // REMOVE OLD TOGGLE (important fix)
+  const oldToggle = document.getElementById("page-toggle");
+  if (oldToggle) oldToggle.remove();
+
+  // TOGGLE HEADER
+  const toggle = document.createElement("div");
+  toggle.id = "page-toggle";
+  toggle.className = "flex items-center justify-between mb-2";
+  toggle.innerHTML = `
     <span class="text-xs text-gray-400">Pages to audit:</span>
-    <button id="toggle-list" class="text-xs text-indigo-400 hover:text-indigo-300">
-      ${pageSelectorExpanded ? '▲ Hide' : '▼ Show'}
+    <button class="text-xs text-indigo-400 hover:text-indigo-300">
+      ▲ Hide
     </button>
   `;
-  pageSelector.insertBefore(toggleDiv, pageSelector.firstChild.nextSibling);
+  selector.insertBefore(toggle, list);
 
-  // Toggle button handler
-  document.getElementById('toggle-list').addEventListener('click', () => {
+  const toggleBtn = toggle.querySelector("button");
+  const listContainer = list;
+
+  toggleBtn.addEventListener("click", () => {
     pageSelectorExpanded = !pageSelectorExpanded;
-    const listContainer = document.querySelector('.page-list-container');
-    const toggleBtn = document.getElementById('toggle-list');
-    
-    if (pageSelectorExpanded) {
-      listContainer.classList.remove('hidden');
-      toggleBtn.innerHTML = '▲ Hide';
-    } else {
-      listContainer.classList.add('hidden');
-      toggleBtn.innerHTML = '▼ Show';
-    }
+    listContainer.classList.toggle("hidden", !pageSelectorExpanded);
+    toggleBtn.textContent = pageSelectorExpanded ? "▲ Hide" : "▼ Show";
   });
 
-  // Add "Select All" option
-  const selectAllDiv = document.createElement('div');
-  selectAllDiv.className = 'flex items-center gap-2 p-2 rounded bg-slate-800/50 cursor-pointer hover:bg-slate-700';
-  selectAllDiv.setAttribute('data-page-item', 'true');
-  selectAllDiv.innerHTML = `
-    <input type="checkbox" id="select-all" class="cursor-pointer">
-    <label for="select-all" class="text-xs cursor-pointer flex-1 font-semibold text-indigo-400">Select All (<span id="select-all-count">${urls.length}</span>)</label>
+  // SELECT ALL
+  const selectAll = document.createElement("div");
+  selectAll.className =
+    "flex items-center gap-2 p-2 rounded bg-slate-800/50 cursor-pointer";
+  selectAll.innerHTML = `
+    <input type="checkbox" id="select-all">
+    <label class="text-xs font-semibold text-indigo-400">
+      Select All (${urls.length})
+    </label>
   `;
-  pageList.appendChild(selectAllDiv);
+  list.appendChild(selectAll);
 
-  // Select all handler - only selects VISIBLE items
-  selectAllDiv.querySelector('#select-all').addEventListener('change', (e) => {
-    const visibleCheckboxes = Array.from(pageList.querySelectorAll('.page-checkbox'))
-      .filter(cb => !cb.closest('[data-page-item]').classList.contains('hidden'));
-    
-    visibleCheckboxes.forEach(cb => cb.checked = e.target.checked);
+  selectAll.querySelector("input").addEventListener("change", e => {
+    list.querySelectorAll(".page-checkbox").forEach(cb => {
+      cb.checked = e.target.checked;
+    });
     updateSelectedCount();
   });
 
-  // Add individual pages
-  urls.forEach((url, index) => {
-    const pageDiv = document.createElement('div');
-    pageDiv.className = 'flex items-center gap-2 p-2 rounded bg-black/40 cursor-pointer hover:bg-slate-800';
-    pageDiv.setAttribute('data-page-item', 'true');
-    
-    const urlObj = new URL(url);
-    const displayPath = urlObj.pathname === '/' ? 'Home' : urlObj.pathname;
-    
-    pageDiv.innerHTML = `
-      <input type="checkbox" id="page-${index}" value="${url}" class="page-checkbox cursor-pointer">
-      <label for="page-${index}" class="text-xs cursor-pointer flex-1 truncate" title="${url}" data-search-text="${url.toLowerCase()}">${displayPath}</label>
-    `;
-    
-    pageList.appendChild(pageDiv);
+  // URL ITEMS
+  urls.forEach((url, i) => {
+    const div = document.createElement("div");
+    div.className =
+      "flex items-center gap-2 p-2 rounded bg-black/40 hover:bg-slate-800";
 
-    // Checkbox change handler
-    pageDiv.querySelector('.page-checkbox').addEventListener('change', () => {
-      updateSelectedCount();
-      updateSelectAllState();
-    });
+    const path = new URL(url).pathname || "Home";
+
+    div.innerHTML = `
+      <input type="checkbox" class="page-checkbox" value="${url}">
+      <label class="text-xs truncate">${path === "/" ? "Home" : path}</label>
+    `;
+
+    div.querySelector("input").addEventListener("change", updateSelectedCount);
+    list.appendChild(div);
   });
 
-  // Initialize search functionality
   initializeSearch();
   updateSelectedCount();
 }
 
-// Update selected page count
-function updateSelectedCount() {
-  const checkedBoxes = document.querySelectorAll('.page-checkbox:checked');
-  document.getElementById('selected-count').textContent = checkedBoxes.length;
-  updateSelectAllState();
-}
-
-// Update "Select All" checkbox state based on visible items
-function updateSelectAllState() {
-  const selectAllCheckbox = document.getElementById('select-all');
-  const pageList = document.getElementById('page-list');
-  
-  if (!selectAllCheckbox) return;
-  
-  const visibleCheckboxes = Array.from(pageList.querySelectorAll('.page-checkbox'))
-    .filter(cb => !cb.closest('[data-page-item]').classList.contains('hidden'));
-  
-  const visibleChecked = visibleCheckboxes.filter(cb => cb.checked);
-  
-  if (visibleCheckboxes.length === 0) {
-    selectAllCheckbox.checked = false;
-    selectAllCheckbox.indeterminate = false;
-  } else if (visibleChecked.length === visibleCheckboxes.length) {
-    selectAllCheckbox.checked = true;
-    selectAllCheckbox.indeterminate = false;
-  } else if (visibleChecked.length > 0) {
-    selectAllCheckbox.checked = false;
-    selectAllCheckbox.indeterminate = true;
-  } else {
-    selectAllCheckbox.checked = false;
-    selectAllCheckbox.indeterminate = false;
-  }
-}
-
-// Initialize search functionality
+// =======================
+// SEARCH
+// =======================
 function initializeSearch() {
-  const searchInput = document.getElementById('page-search');
-  const pageList = document.getElementById('page-list');
-  const filteredCountDiv = document.getElementById('filtered-count');
-  const visibleCountSpan = document.getElementById('visible-count');
-  const selectAllCountSpan = document.getElementById('select-all-count');
-  
-  if (!searchInput) return;
-  
-  searchInput.addEventListener('input', (e) => {
-    const searchTerm = e.target.value.toLowerCase().trim();
-    const pageItems = pageList.querySelectorAll('[data-page-item]');
-    let visibleCount = 0;
-    
-    pageItems.forEach((item, index) => {
-      // Skip the "Select All" row
-      if (index === 0) return;
-      
-      const label = item.querySelector('label');
-      const searchText = label.getAttribute('data-search-text');
-      
-      if (searchTerm === '' || searchText.includes(searchTerm)) {
-        item.classList.remove('hidden');
-        visibleCount++;
-      } else {
-        item.classList.add('hidden');
-      }
+  const input = document.getElementById("page-search");
+  const items = document.querySelectorAll("#page-list > div");
+
+  input.oninput = () => {
+    const q = input.value.toLowerCase();
+    items.forEach((item, i) => {
+      if (i === 0) return;
+      item.classList.toggle(
+        "hidden",
+        !item.textContent.toLowerCase().includes(q)
+      );
     });
-    
-    // Update visible count display
-    if (searchTerm !== '') {
-      filteredCountDiv.classList.remove('hidden');
-      visibleCountSpan.textContent = visibleCount;
-      selectAllCountSpan.textContent = visibleCount;
-    } else {
-      filteredCountDiv.classList.add('hidden');
-      selectAllCountSpan.textContent = availableUrls.length;
-    }
-    
-    // Update "Select All" state after filtering
-    updateSelectAllState();
-    
-    // Show message if no results
-    if (visibleCount === 0 && searchTerm !== '') {
-      let noResultsDiv = pageList.querySelector('#no-results');
-      if (!noResultsDiv) {
-        noResultsDiv = document.createElement('div');
-        noResultsDiv.id = 'no-results';
-        noResultsDiv.className = 'text-xs text-gray-500 text-center py-4';
-        noResultsDiv.textContent = 'No pages found';
-        pageList.appendChild(noResultsDiv);
-      }
-      noResultsDiv.classList.remove('hidden');
-    } else {
-      const noResultsDiv = pageList.querySelector('#no-results');
-      if (noResultsDiv) {
-        noResultsDiv.classList.add('hidden');
-      }
-    }
-  });
-  
-  // Clear search when mode changes
-  searchInput.value = '';
+  };
+}
+
+// =======================
+// COUNT
+// =======================
+function updateSelectedCount() {
+  document.getElementById("selected-count").textContent =
+    document.querySelectorAll(".page-checkbox:checked").length;
 }
 
 // Get selected URLs based on mode
@@ -337,6 +247,7 @@ document.getElementById("run").addEventListener("click", async () => {
       };
 
       renderUI(combined);
+      saveAuditResults(combined);
 
     } catch (err) {
       console.error(err);
@@ -567,79 +478,112 @@ function renderUI(data) {
     const issueDiv = document.createElement('div');
     issueDiv.className = 'border border-slate-800 rounded-lg p-2 bg-black/40';
     
-    // Issue header with source badge
+    // Issue header - REMOVED source badge showing tool name
     const headerDiv = document.createElement('div');
     headerDiv.className = 'flex items-center justify-between mb-1';
     
-    const sourceSpan = document.createElement('span');
-    sourceSpan.className = `text-xs font-semibold ${issue.source === "axe" ? "text-violet-400" : "text-sky-400"}`;
-    sourceSpan.textContent = issue.source.toUpperCase();
+    // Only show impact if it exists (for axe issues)
     if (issue.impact) {
-      sourceSpan.textContent += ` (${issue.impact})`;
+      const impactSpan = document.createElement('span');
+      impactSpan.className = 'text-xs font-semibold text-violet-400';
+      impactSpan.textContent = `Impact: ${issue.impact}`;
+      headerDiv.appendChild(impactSpan);
     }
-    
-    headerDiv.appendChild(sourceSpan);
     
     // Title
     const titleP = document.createElement('p');
     titleP.className = 'text-sm mt-1';
     titleP.textContent = issue.title;
     
-    issueDiv.appendChild(headerDiv);
+    if (issue.impact) {
+      issueDiv.appendChild(headerDiv);
+    }
     issueDiv.appendChild(titleP);
     
-    // NEW: Show pages affected if multiple pages
-    if (issue.count > 1 && issue.pages && issue.pages.length > 0) {
+    // Show pages affected - UPDATED with dropdown for multiple pages
+    if (issue.pages && issue.pages.length > 0) {
       const pagesDiv = document.createElement('div');
       pagesDiv.className = 'mt-2 pt-2 border-t border-slate-700';
       
-      const pagesHeader = document.createElement('div');
-      pagesHeader.className = 'text-xs text-gray-400 mb-1';
-      pagesHeader.textContent = `Found on ${issue.pages.length} page${issue.pages.length > 1 ? 's' : ''}:`;
-      pagesDiv.appendChild(pagesHeader);
-      
-      const pagesList = document.createElement('div');
-      pagesList.className = 'space-y-1';
-      
-      issue.pages.forEach(pageUrl => {
+      if (issue.pages.length === 1) {
+        // Single page - show directly with view button
         const pageItem = document.createElement('div');
         pageItem.className = 'flex items-center gap-2';
         
-        const urlObj = new URL(pageUrl);
+        const urlObj = new URL(issue.pages[0]);
         const displayPath = urlObj.pathname === '/' ? 'Home' : urlObj.pathname;
         
         const pathSpan = document.createElement('span');
         pathSpan.className = 'text-xs text-gray-300 flex-1 truncate';
         pathSpan.textContent = displayPath;
-        pathSpan.title = pageUrl;
+        pathSpan.title = issue.pages[0];
         
-        if (issue.selector) {
+        const viewBtn = document.createElement('button');
+        viewBtn.className = 'text-xs text-indigo-400 hover:text-indigo-300 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700';
+        viewBtn.innerHTML = '👁️ View';
+        viewBtn.addEventListener('click', () => {
+          highlightElementOnPage(issue.selector, issue.pages[0]);
+        });
+        
+        pageItem.appendChild(pathSpan);
+        pageItem.appendChild(viewBtn);
+        pagesDiv.appendChild(pageItem);
+      } else {
+        // Multiple pages - create dropdown
+        const dropdownContainer = document.createElement('div');
+        dropdownContainer.className = 'relative';
+        
+        const dropdownButton = document.createElement('button');
+        dropdownButton.className = 'w-full flex items-center justify-between px-3 py-2 text-xs bg-slate-800 rounded-lg hover:bg-slate-700 text-gray-300';
+        dropdownButton.innerHTML = `
+          <span>Found on ${issue.pages.length} pages</span>
+          <span class="dropdown-arrow">▼</span>
+        `;
+        
+        const dropdownMenu = document.createElement('div');
+        dropdownMenu.className = 'hidden mt-1 bg-slate-800 rounded-lg border border-slate-700 max-h-[150px] overflow-y-auto';
+        dropdownMenu.style.position = 'relative';
+        dropdownMenu.style.zIndex = '10';
+        
+        issue.pages.forEach(pageUrl => {
+          const menuItem = document.createElement('div');
+          menuItem.className = 'flex items-center gap-2 px-3 py-2 hover:bg-slate-700 border-b border-slate-700 last:border-b-0';
+          
+          const urlObj = new URL(pageUrl);
+          const displayPath = urlObj.pathname === '/' ? 'Home' : urlObj.pathname;
+          
+          const pathSpan = document.createElement('span');
+          pathSpan.className = 'text-xs text-gray-300 flex-1 truncate';
+          pathSpan.textContent = displayPath;
+          pathSpan.title = pageUrl;
+          
           const viewBtn = document.createElement('button');
-          viewBtn.className = 'text-xs text-indigo-400 hover:text-indigo-300 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700';
+          viewBtn.className = 'text-xs text-indigo-400 hover:text-indigo-300 px-2 py-1 rounded bg-slate-900 hover:bg-slate-600 shrink-0';
           viewBtn.innerHTML = '👁️ View';
-          viewBtn.addEventListener('click', () => {
+          viewBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
             highlightElementOnPage(issue.selector, pageUrl);
           });
           
-          pageItem.appendChild(pathSpan);
-          pageItem.appendChild(viewBtn);
-        } else {
-          pageItem.appendChild(pathSpan);
-        }
+          menuItem.appendChild(pathSpan);
+          menuItem.appendChild(viewBtn);
+          dropdownMenu.appendChild(menuItem);
+        });
         
-        pagesList.appendChild(pageItem);
-      });
+        // Toggle dropdown
+        let isOpen = false;
+        dropdownButton.addEventListener('click', () => {
+          isOpen = !isOpen;
+          dropdownMenu.classList.toggle('hidden', !isOpen);
+          dropdownButton.querySelector('.dropdown-arrow').textContent = isOpen ? '▲' : '▼';
+        });
+        
+        dropdownContainer.appendChild(dropdownButton);
+        dropdownContainer.appendChild(dropdownMenu);
+        pagesDiv.appendChild(dropdownContainer);
+      }
       
-      pagesDiv.appendChild(pagesList);
       issueDiv.appendChild(pagesDiv);
-    } else if (issue.selector) {
-      const viewBtn = document.createElement('button');
-      viewBtn.className = 'mt-2 text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1';
-      viewBtn.innerHTML = '👁️ View on page';
-      viewBtn.addEventListener('click', () => {
-        highlightElementOnPage(issue.selector, issue.pages[0]);
-      });
-      issueDiv.appendChild(viewBtn);
     }
     
     issuesDiv.appendChild(issueDiv);
@@ -647,28 +591,171 @@ function renderUI(data) {
 }
 
 function highlightElementOnPage(selector, targetUrl) {
-  chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
-    if (!tab) return;
+  chrome.tabs.query({ active: true, currentWindow: true }, ([currentTab]) => {
+    if (!currentTab) return;
 
-    if (targetUrl && tab.url !== targetUrl) {
-      chrome.tabs.update(tab.id, { url: targetUrl }, () => {
-        setTimeout(() => {
-          sendHighlightMessage(tab.id, selector);
-        }, 1500);
+    // Normalize URLs for comparison
+    const normalizeUrl = (url) => {
+      try {
+        const urlObj = new URL(url);
+        urlObj.hash = '';
+        urlObj.search = '';
+        return urlObj.toString().replace(/\/$/, '');
+      } catch (e) {
+        return url;
+      }
+    };
+
+    const currentUrl = normalizeUrl(currentTab.url);
+    const targetNormalized = normalizeUrl(targetUrl);
+    
+    if (currentUrl === targetNormalized) {
+      // Same page - just highlight
+      console.log("Highlighting on current page");
+      
+      chrome.scripting.executeScript({
+        target: { tabId: currentTab.id },
+        files: ["content.js"]
+      }).then(() => {
+        return new Promise(resolve => setTimeout(resolve, 100));
+      }).then(() => {
+        return chrome.tabs.sendMessage(currentTab.id, {
+          action: "highlightElement",
+          selector: selector
+        });
+      }).then((response) => {
+        console.log("Highlight successful:", response);
+      }).catch((error) => {
+        console.error("Failed to highlight:", error);
       });
     } else {
-      sendHighlightMessage(tab.id, selector);
+      // Different page - open in new tab with background handling
+      console.log("Opening new tab for:", targetUrl);
+      
+      chrome.tabs.create({ 
+        url: targetUrl, 
+        active: true 
+      }, (newTab) => {
+        console.log("New tab created:", newTab.id);
+        
+        // Send to background if available, otherwise set up listener
+        if (typeof chrome.runtime !== 'undefined' && chrome.runtime.sendMessage) {
+          chrome.runtime.sendMessage({
+            action: "highlightOnTab",
+            tabId: newTab.id,
+            selector: selector,
+            url: targetUrl
+          }).catch((error) => {
+            console.log("Background not available, using direct listener");
+            setupDirectHighlight(newTab.id, selector);
+          });
+        } else {
+          setupDirectHighlight(newTab.id, selector);
+        }
+      });
     }
   });
 }
 
-function sendHighlightMessage(tabId, selector) {
-  chrome.tabs.sendMessage(tabId, { 
-    action: "highlightElement", 
-    selector: selector 
-  }, (response) => {
-    if (chrome.runtime.lastError) {
-      console.error("Failed to highlight element:", chrome.runtime.lastError.message);
+// Fallback direct highlight for when background is not available
+function setupDirectHighlight(tabId, selector) {
+  const listener = (updatedTabId, changeInfo) => {
+    if (updatedTabId === tabId && changeInfo.status === 'complete') {
+      chrome.tabs.onUpdated.removeListener(listener);
+      
+      chrome.scripting.executeScript({
+        target: { tabId: tabId },
+        files: ["content.js"]
+      }).then(() => {
+        return new Promise(resolve => setTimeout(resolve, 800));
+      }).then(() => {
+        return chrome.tabs.sendMessage(tabId, {
+          action: "highlightElement",
+          selector: selector
+        });
+      }).then((response) => {
+        console.log("Highlight successful:", response);
+      }).catch((error) => {
+        console.error("Failed to highlight:", error);
+      });
     }
-  });
+  };
+  
+  chrome.tabs.onUpdated.addListener(listener);
+  
+  // Cleanup after 15 seconds
+  setTimeout(() => {
+    chrome.tabs.onUpdated.removeListener(listener);
+  }, 15000);
+}
+
+// Save audit results to chrome.storage
+function saveAuditResults(results) {
+  lastAuditResults = results;
+  
+  // Check if chrome.storage is available
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    try {
+      chrome.storage.local.set({ 
+        lastAuditResults: results,
+        lastAuditTimestamp: Date.now()
+      }, () => {
+        if (chrome.runtime.lastError) {
+          console.error("Failed to save results:", chrome.runtime.lastError);
+        } else {
+          console.log("Audit results saved");
+        }
+      });
+    } catch (error) {
+      console.error("Storage error:", error);
+    }
+  }
+}
+
+// Restore audit results from chrome.storage
+function restoreAuditResults() {
+  // Check if chrome.storage is available
+  if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) {
+    console.log("Chrome storage not available");
+    return;
+  }
+  
+  try {
+    chrome.storage.local.get(['lastAuditResults', 'lastAuditTimestamp'], (data) => {
+      if (chrome.runtime.lastError) {
+        console.error("Failed to restore results:", chrome.runtime.lastError);
+        return;
+      }
+      
+      if (data.lastAuditResults && data.lastAuditTimestamp) {
+        // Only restore if less than 30 minutes old
+        const age = Date.now() - data.lastAuditTimestamp;
+        if (age < 30 * 60 * 1000) {
+          console.log("Restoring previous audit results");
+          lastAuditResults = data.lastAuditResults;
+          renderUI(data.lastAuditResults);
+          
+          // Show info banner
+          const infoBanner = document.getElementById('popup-info');
+          if (infoBanner) {
+            infoBanner.classList.remove('hidden');
+            infoBanner.innerHTML = '✓ Previous audit results restored. Click "Run Audit" for fresh results.';
+          }
+        }
+      }
+    });
+  } catch (error) {
+    console.error("Restore error:", error);
+  }
+}
+
+function clearAuditResults() {
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    try {
+      chrome.storage.local.remove(['lastAuditResults', 'lastAuditTimestamp']);
+    } catch (error) {
+      console.error("Clear error:", error);
+    }
+  }
+  lastAuditResults = null;
 }

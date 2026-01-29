@@ -4,6 +4,12 @@
   <meta charset="UTF-8" />
   <title>Flow Finder</title>
   <link rel="stylesheet" href="tailwind.css">
+  <style>
+    /* Ensure popup stays open */
+    body {
+      min-height: 400px;
+    }
+  </style>
 </head>
 
 <body class="w-[340px] p-4 text-gray-200 bg-gradient-to-br from-slate-900 to-black font-sans">
@@ -11,6 +17,11 @@
   <h1 class="text-lg font-semibold text-center mb-3">
     Flow Finder
   </h1>
+
+  <!-- Info banner about popup behavior -->
+  <div id="popup-info" class="mb-3 p-2 bg-blue-900/30 border border-blue-700/50 rounded text-xs text-blue-200 hidden">
+    💡 Tip: The popup may close when opening new tabs. Click the extension icon again to reopen with your results.
+  </div>
 
   <!-- Audit Mode Selection -->
   <div id="audit-options" class="mb-4 space-y-2">
@@ -50,7 +61,6 @@
     </div>
     <div class="mt-2 text-xs text-gray-400 text-center">
       <span id="selected-count">0</span> pages selected
-      <span id="filtered-count" class="hidden"> • <span id="visible-count">0</span> visible</span>
     </div>
   </div>
 

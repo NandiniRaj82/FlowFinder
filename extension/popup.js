@@ -260,7 +260,7 @@ async function auditMultipleURLs(urls, tabId) {
   const results = [];
   let axeAvailable = false;
 
-  // NEW: Check if Axe is available on first URL
+  // Check if Axe is available on first URL
   try {
     await chrome.scripting.executeScript({
       target: { tabId: tabId },
@@ -478,7 +478,7 @@ function renderUI(data) {
     const issueDiv = document.createElement('div');
     issueDiv.className = 'border border-slate-800 rounded-lg p-2 bg-black/40';
     
-    // Issue header - REMOVED source badge showing tool name
+    // Issue header
     const headerDiv = document.createElement('div');
     headerDiv.className = 'flex items-center justify-between mb-1';
     
@@ -500,7 +500,7 @@ function renderUI(data) {
     }
     issueDiv.appendChild(titleP);
     
-    // Show pages affected - UPDATED with dropdown for multiple pages
+    // Show pages affected with improved navigation
     if (issue.pages && issue.pages.length > 0) {
       const pagesDiv = document.createElement('div');
       pagesDiv.className = 'mt-2 pt-2 border-t border-slate-700';
@@ -521,7 +521,8 @@ function renderUI(data) {
         const viewBtn = document.createElement('button');
         viewBtn.className = 'text-xs text-indigo-400 hover:text-indigo-300 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700';
         viewBtn.innerHTML = '👁️ View';
-        viewBtn.addEventListener('click', () => {
+        viewBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
           highlightElementOnPage(issue.selector, issue.pages[0]);
         });
         
@@ -590,16 +591,29 @@ function renderUI(data) {
   });
 }
 
+// =======================
+// IMPROVED HIGHLIGHT NAVIGATION
+// =======================
 function highlightElementOnPage(selector, targetUrl) {
-  chrome.tabs.query({ active: true, currentWindow: true }, ([currentTab]) => {
-    if (!currentTab) return;
+  if (!selector) {
+    console.log('[Popup] No selector provided, skipping highlight');
+    return;
+  }
 
-    // Normalize URLs for comparison
+  chrome.tabs.query({ active: true, currentWindow: true }, ([currentTab]) => {
+    if (!currentTab) {
+      console.error('[Popup] No active tab found');
+      return;
+    }
+
+    // Normalize URLs for comparison (remove trailing slashes, hash, query params)
     const normalizeUrl = (url) => {
       try {
         const urlObj = new URL(url);
+        // Remove hash and query params for comparison
         urlObj.hash = '';
         urlObj.search = '';
+        // Remove trailing slash
         return urlObj.toString().replace(/\/$/, '');
       } catch (e) {
         return url;
@@ -609,91 +623,68 @@ function highlightElementOnPage(selector, targetUrl) {
     const currentUrl = normalizeUrl(currentTab.url);
     const targetNormalized = normalizeUrl(targetUrl);
     
+    console.log('[Popup] Comparing URLs:', { current: currentUrl, target: targetNormalized });
+    
     if (currentUrl === targetNormalized) {
-      // Same page - just highlight
-      console.log("Highlighting on current page");
+      // ===== SAME TAB NAVIGATION =====
+      console.log('[Popup] Same page detected - highlighting in current tab');
       
+      // Inject content script and highlight immediately
       chrome.scripting.executeScript({
         target: { tabId: currentTab.id },
         files: ["content.js"]
       }).then(() => {
-        return new Promise(resolve => setTimeout(resolve, 100));
+        // Small delay to ensure script is ready
+        return new Promise(resolve => setTimeout(resolve, 200));
       }).then(() => {
+        // Send highlight message
         return chrome.tabs.sendMessage(currentTab.id, {
           action: "highlightElement",
           selector: selector
         });
       }).then((response) => {
-        console.log("Highlight successful:", response);
+        if (response && response.success) {
+          console.log('[Popup] Element highlighted successfully');
+        } else {
+          console.warn('[Popup] Highlight failed:', response);
+        }
       }).catch((error) => {
-        console.error("Failed to highlight:", error);
+        console.error('[Popup] Failed to highlight element:', error);
       });
-    } else {
-      // Different page - open in new tab with background handling
-      console.log("Opening new tab for:", targetUrl);
       
+    } else {
+      // ===== CROSS-TAB NAVIGATION =====
+      console.log('[Popup] Different page detected - opening new tab');
+      
+      // Open new tab with target URL
       chrome.tabs.create({ 
         url: targetUrl, 
-        active: true 
+        active: true // Make it the active tab so user sees it
       }, (newTab) => {
-        console.log("New tab created:", newTab.id);
+        console.log('[Popup] New tab created:', newTab.id);
         
-        // Send to background if available, otherwise set up listener
-        if (typeof chrome.runtime !== 'undefined' && chrome.runtime.sendMessage) {
-          chrome.runtime.sendMessage({
-            action: "highlightOnTab",
-            tabId: newTab.id,
-            selector: selector,
-            url: targetUrl
-          }).catch((error) => {
-            console.log("Background not available, using direct listener");
-            setupDirectHighlight(newTab.id, selector);
-          });
-        } else {
-          setupDirectHighlight(newTab.id, selector);
-        }
+        // Send message to background script to handle highlighting when page loads
+        chrome.runtime.sendMessage({
+          action: "highlightOnTab",
+          tabId: newTab.id,
+          selector: selector,
+          url: targetUrl
+        }).then(() => {
+          console.log('[Popup] Highlight request sent to background');
+        }).catch((error) => {
+          console.error('[Popup] Failed to send highlight request:', error);
+        });
       });
     }
   });
 }
 
-// Fallback direct highlight for when background is not available
-function setupDirectHighlight(tabId, selector) {
-  const listener = (updatedTabId, changeInfo) => {
-    if (updatedTabId === tabId && changeInfo.status === 'complete') {
-      chrome.tabs.onUpdated.removeListener(listener);
-      
-      chrome.scripting.executeScript({
-        target: { tabId: tabId },
-        files: ["content.js"]
-      }).then(() => {
-        return new Promise(resolve => setTimeout(resolve, 800));
-      }).then(() => {
-        return chrome.tabs.sendMessage(tabId, {
-          action: "highlightElement",
-          selector: selector
-        });
-      }).then((response) => {
-        console.log("Highlight successful:", response);
-      }).catch((error) => {
-        console.error("Failed to highlight:", error);
-      });
-    }
-  };
-  
-  chrome.tabs.onUpdated.addListener(listener);
-  
-  // Cleanup after 15 seconds
-  setTimeout(() => {
-    chrome.tabs.onUpdated.removeListener(listener);
-  }, 15000);
-}
-
-// Save audit results to chrome.storage
+// =======================
+// STATE PERSISTENCE
+// =======================
 function saveAuditResults(results) {
   lastAuditResults = results;
   
-  // Check if chrome.storage is available
   if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
     try {
       chrome.storage.local.set({ 
@@ -701,37 +692,37 @@ function saveAuditResults(results) {
         lastAuditTimestamp: Date.now()
       }, () => {
         if (chrome.runtime.lastError) {
-          console.error("Failed to save results:", chrome.runtime.lastError);
+          console.error('[Popup] Failed to save results:', chrome.runtime.lastError);
         } else {
-          console.log("Audit results saved");
+          console.log('[Popup] Audit results saved to storage');
         }
       });
     } catch (error) {
-      console.error("Storage error:", error);
+      console.error('[Popup] Storage error:', error);
     }
   }
 }
 
-// Restore audit results from chrome.storage
 function restoreAuditResults() {
-  // Check if chrome.storage is available
   if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) {
-    console.log("Chrome storage not available");
+    console.log('[Popup] Chrome storage not available');
     return;
   }
   
   try {
     chrome.storage.local.get(['lastAuditResults', 'lastAuditTimestamp'], (data) => {
       if (chrome.runtime.lastError) {
-        console.error("Failed to restore results:", chrome.runtime.lastError);
+        console.error('[Popup] Failed to restore results:', chrome.runtime.lastError);
         return;
       }
       
       if (data.lastAuditResults && data.lastAuditTimestamp) {
         // Only restore if less than 30 minutes old
         const age = Date.now() - data.lastAuditTimestamp;
-        if (age < 30 * 60 * 1000) {
-          console.log("Restoring previous audit results");
+        const maxAge = 30 * 60 * 1000; // 30 minutes
+        
+        if (age < maxAge) {
+          console.log('[Popup] Restoring previous audit results');
           lastAuditResults = data.lastAuditResults;
           renderUI(data.lastAuditResults);
           
@@ -739,13 +730,16 @@ function restoreAuditResults() {
           const infoBanner = document.getElementById('popup-info');
           if (infoBanner) {
             infoBanner.classList.remove('hidden');
-            infoBanner.innerHTML = '✓ Previous audit results restored. Click "Run Audit" for fresh results.';
+            const minutesAgo = Math.floor(age / 60000);
+            infoBanner.innerHTML = `✓ Audit results from ${minutesAgo > 0 ? minutesAgo + ' min ago' : 'moments ago'}. Click "Run Audit" for fresh results.`;
           }
+        } else {
+          console.log('[Popup] Stored results too old, not restoring');
         }
       }
     });
   } catch (error) {
-    console.error("Restore error:", error);
+    console.error('[Popup] Restore error:', error);
   }
 }
 
@@ -753,9 +747,12 @@ function clearAuditResults() {
   if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
     try {
       chrome.storage.local.remove(['lastAuditResults', 'lastAuditTimestamp']);
+      console.log('[Popup] Audit results cleared');
     } catch (error) {
-      console.error("Clear error:", error);
+      console.error('[Popup] Clear error:', error);
     }
   }
   lastAuditResults = null;
 }
+
+console.log('[Popup] Popup script initialized');

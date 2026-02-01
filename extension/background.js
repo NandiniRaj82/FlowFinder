@@ -1,93 +1,101 @@
-// Background service worker for Flow Finder
-// Helps manage highlighting across tabs
+// =======================
+// BACKGROUND SERVICE WORKER
+// Handles cross-tab highlighting coordination
+// =======================
 
-let pendingHighlights = new Map();
+// Store pending highlight requests for tabs being loaded
+const pendingHighlights = new Map();
 
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "highlightOnTab") {
     const { tabId, selector, url } = request;
     
-    console.log("Background received highlight request:", { tabId, selector, url });
+    console.log(`[Background] Received highlight request for tab ${tabId}`);
     
-    // Store pending highlight
+    // Store the pending highlight
     pendingHighlights.set(tabId, { selector, url, timestamp: Date.now() });
     
-    // Try to highlight
-    highlightElement(tabId, selector);
+    // Set up listener for when the tab finishes loading
+    const listener = (updatedTabId, changeInfo, tab) => {
+      if (updatedTabId === tabId && changeInfo.status === 'complete') {
+        console.log(`[Background] Tab ${tabId} loaded, executing highlight`);
+        
+        // Remove listener
+        chrome.tabs.onUpdated.removeListener(listener);
+        
+        // Get the pending highlight data
+        const highlightData = pendingHighlights.get(tabId);
+        if (!highlightData) {
+          console.log(`[Background] No highlight data found for tab ${tabId}`);
+          return;
+        }
+        
+        // Inject content script and highlight
+        executeHighlightSequence(tabId, highlightData.selector);
+        
+        // Clean up
+        pendingHighlights.delete(tabId);
+      }
+    };
+    
+    chrome.tabs.onUpdated.addListener(listener);
+    
+    // Cleanup listener after 20 seconds to prevent memory leaks
+    setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      pendingHighlights.delete(tabId);
+    }, 20000);
     
     sendResponse({ success: true });
     return true;
   }
   
-  if (request.action === "tabLoaded") {
-    const { tabId } = request;
-    
-    // Check if there's a pending highlight for this tab
-    if (pendingHighlights.has(tabId)) {
-      const { selector } = pendingHighlights.get(tabId);
-      console.log("Tab loaded with pending highlight:", tabId);
-      
-      setTimeout(() => {
-        highlightElement(tabId, selector);
-        pendingHighlights.delete(tabId);
-      }, 500);
-    }
-    
-    return true;
-  }
+  return false;
 });
 
-// Listen for tab updates
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.status === 'complete' && pendingHighlights.has(tabId)) {
-    const { selector } = pendingHighlights.get(tabId);
-    console.log("Tab completed loading, highlighting:", tabId);
-    
-    setTimeout(() => {
-      highlightElement(tabId, selector);
-      pendingHighlights.delete(tabId);
-    }, 800);
-  }
-});
-
-// Function to inject and highlight
-async function highlightElement(tabId, selector) {
+// Execute the highlight sequence: inject script, wait, then highlight
+async function executeHighlightSequence(tabId, selector) {
   try {
-    // Inject content script
+    // Step 1: Inject content script
     await chrome.scripting.executeScript({
       target: { tabId: tabId },
       files: ["content.js"]
     });
     
-    console.log("Content script injected into tab:", tabId);
+    console.log(`[Background] Content script injected into tab ${tabId}`);
     
-    // Wait a bit for script to initialize
-    await new Promise(resolve => setTimeout(resolve, 300));
+    // Step 2: Wait a bit for script to initialize
+    await new Promise(resolve => setTimeout(resolve, 500));
     
-    // Send highlight message
-    chrome.tabs.sendMessage(tabId, {
+    // Step 3: Send highlight message
+    const response = await chrome.tabs.sendMessage(tabId, {
       action: "highlightElement",
       selector: selector
-    }, (response) => {
-      if (chrome.runtime.lastError) {
-        console.error("Highlight error:", chrome.runtime.lastError.message);
-      } else {
-        console.log("Highlight response:", response);
-      }
     });
     
+    console.log(`[Background] Highlight response:`, response);
+    
   } catch (error) {
-    console.error("Failed to highlight element:", error);
+    console.error(`[Background] Failed to highlight on tab ${tabId}:`, error);
   }
 }
 
-// Clean up old pending highlights (older than 30 seconds)
+// Clean up old pending highlights periodically (every minute)
 setInterval(() => {
   const now = Date.now();
+  const timeout = 60000; // 1 minute
+  
   for (const [tabId, data] of pendingHighlights.entries()) {
-    if (now - data.timestamp > 30000) {
+    if (now - data.timestamp > timeout) {
+      console.log(`[Background] Cleaning up stale highlight for tab ${tabId}`);
       pendingHighlights.delete(tabId);
     }
   }
-}, 10000);
+}, 60000);
+
+chrome.action.onClicked.addListener((tab) => {
+  console.log('[Background] Extension icon clicked');
+});
+
+console.log('[Background] Service worker initialized');

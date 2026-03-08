@@ -206,3 +206,48 @@ function addHighlightOverlay(element) {
 }
 
 console.log('[Content] Content script loaded');
+
+
+// =======================
+// postMessage Relay — ADDED FOR FLOW FINDER WEB APP
+// Allows the Next.js web app (running in a normal browser tab) to reach
+// the background service worker through this content script.
+// Web app sends postMessage → content script forwards to background
+// → background responds → content script relays response back to web app.
+// =======================
+
+window.addEventListener('message', (event) => {
+  // Only accept messages from the same window
+  if (event.source !== window) return;
+  if (event.data?.from !== 'FLOW_FINDER_WEB') return;
+
+  const { requestId, payload } = event.data;
+
+  console.log('[Content] Relaying message to background:', payload?.action);
+
+  chrome.runtime.sendMessage(payload, (response) => {
+    window.postMessage(
+      { from: 'FLOW_FINDER_EXT', requestId, response },
+      '*'
+    );
+  });
+});
+
+
+// =======================
+// Inject stored errors onto window — ADDED FOR FLOW FINDER WEB APP
+// Exposes errors stored by the extension onto window.__flowFinderErrors
+// so the web app can read them directly as a fallback (no messaging needed).
+// =======================
+
+chrome.storage.local.get('accessibilityErrors', (result) => {
+  const allErrors = result.accessibilityErrors || {};
+
+  // Flatten all tabs' errors into one array
+  const flat = Object.values(allErrors).flatMap(entry => entry.errors || []);
+
+  if (flat.length > 0) {
+    window.__flowFinderErrors = flat;
+    console.log('[Content] Injected', flat.length, 'errors onto window.__flowFinderErrors');
+  }
+});

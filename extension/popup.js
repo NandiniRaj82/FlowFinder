@@ -610,10 +610,8 @@ function highlightElementOnPage(selector, targetUrl) {
     const normalizeUrl = (url) => {
       try {
         const urlObj = new URL(url);
-        // Remove hash and query params for comparison
         urlObj.hash = '';
         urlObj.search = '';
-        // Remove trailing slash
         return urlObj.toString().replace(/\/$/, '');
       } catch (e) {
         return url;
@@ -629,15 +627,12 @@ function highlightElementOnPage(selector, targetUrl) {
       // ===== SAME TAB NAVIGATION =====
       console.log('[Popup] Same page detected - highlighting in current tab');
       
-      // Inject content script and highlight immediately
       chrome.scripting.executeScript({
         target: { tabId: currentTab.id },
         files: ["content.js"]
       }).then(() => {
-        // Small delay to ensure script is ready
         return new Promise(resolve => setTimeout(resolve, 200));
       }).then(() => {
-        // Send highlight message
         return chrome.tabs.sendMessage(currentTab.id, {
           action: "highlightElement",
           selector: selector
@@ -656,14 +651,12 @@ function highlightElementOnPage(selector, targetUrl) {
       // ===== CROSS-TAB NAVIGATION =====
       console.log('[Popup] Different page detected - opening new tab');
       
-      // Open new tab with target URL
       chrome.tabs.create({ 
         url: targetUrl, 
-        active: true // Make it the active tab so user sees it
+        active: true
       }, (newTab) => {
         console.log('[Popup] New tab created:', newTab.id);
         
-        // Send message to background script to handle highlighting when page loads
         chrome.runtime.sendMessage({
           action: "highlightOnTab",
           tabId: newTab.id,
@@ -684,7 +677,22 @@ function highlightElementOnPage(selector, targetUrl) {
 // =======================
 function saveAuditResults(results) {
   lastAuditResults = results;
-  
+
+  // ── Store combined lighthouse + axe errors for Flow Finder web app ──
+  if (results.accessibilityIssues && results.accessibilityIssues.length > 0) {
+    chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
+      if (!tab) return;
+      chrome.runtime.sendMessage({
+        action: "storeAccessibilityErrors",
+        errors: results.accessibilityIssues,
+        url:    tab.url,
+        tabId:  tab.id
+      });
+      console.log(`[Popup] Stored ${results.accessibilityIssues.length} combined errors for web app import`);
+    });
+  }
+  // ────────────────────────────────────────────────────────────────────
+
   if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
     try {
       chrome.storage.local.set({ 

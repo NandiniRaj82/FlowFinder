@@ -4,39 +4,30 @@
 // Using chrome.storage.local for persistent error storage
 // =======================
 
-// Listen for messages from popup / content scripts
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
-  // ── Store accessibility errors from the scanner ──────────────────────────
   if (request.action === "storeAccessibilityErrors") {
 
     const { errors, url, tabId } = request;
 
-    console.log(`[Background] Storing ${errors.length} accessibility errors for tab ${tabId}`);
 
-    // Read existing stored errors, then merge / overwrite for this tab
-    chrome.storage.local.get("accessibilityErrors", (result) => {
-
-      const allErrors = result.accessibilityErrors || {};
-
-      allErrors[tabId] = {
+      const freshErrors = {
+      [tabId]: {
         errors:    errors,
         url:       url,
         tabId:     tabId,
         timestamp: Date.now()
-      };
+      }
+    };
 
-      chrome.storage.local.set({ accessibilityErrors: allErrors }, () => {
+      chrome.storage.local.set({ accessibilityErrors: freshErrors }, () => {
         console.log(`[Background] Errors saved for tab ${tabId} (${errors.length} errors)`);
         sendResponse({ success: true, count: errors.length });
       });
 
-    });
-
     return true; // async response
   }
 
-  // ── Retrieve errors for a specific tab ───────────────────────────────────
   if (request.action === "getAccessibilityErrors") {
 
     const { tabId } = request;
@@ -62,7 +53,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
       const allErrors = result.accessibilityErrors || {};
 
-      // Flatten into a single array, newest first
       const flat = Object.values(allErrors)
         .sort((a, b) => b.timestamp - a.timestamp)
         .flatMap(entry => entry.errors.map(err => ({ ...err, sourceUrl: entry.url, tabId: entry.tabId })));
@@ -76,7 +66,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
-  // ── Clear errors for a specific tab ──────────────────────────────────────
   if (request.action === "clearAccessibilityErrors") {
 
     const { tabId } = request;
@@ -96,14 +85,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
-  // ── Highlight element on tab ──────────────────────────────────────────────
   if (request.action === "highlightOnTab") {
 
     const { tabId, selector, url } = request;
 
     console.log(`[Background] Received highlight request for tab ${tabId}`);
 
-    // Store highlight temporarily in session storage
     chrome.storage.session.set({
       [tabId]: {
         selector:  selector,
@@ -133,7 +120,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     chrome.tabs.onUpdated.addListener(listener);
 
-    // Safety cleanup after 20 s
     setTimeout(() => {
       chrome.tabs.onUpdated.removeListener(listener);
       chrome.storage.session.remove(String(tabId));
@@ -146,10 +132,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   return false;
 });
 
-
-// =======================
-// Highlight Execution
-// =======================
 
 async function executeHighlightSequence(tabId, selector) {
 
@@ -176,10 +158,6 @@ async function executeHighlightSequence(tabId, selector) {
   }
 }
 
-
-// =======================
-// Periodic cleanup of stale errors (older than 24 h)
-// =======================
 
 function cleanupStaleErrors() {
 
@@ -228,9 +206,6 @@ setInterval(() => {
 }, 60000);
 
 
-// =======================
-// Extension icon click
-// =======================
 
 chrome.action.onClicked.addListener((tab) => {
   console.log("[Background] Extension icon clicked on tab:", tab.id);
